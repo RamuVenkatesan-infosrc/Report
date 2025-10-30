@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Performance Analyzer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .endpoint {
+            background: #f8f9fa;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+        .method {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        .get { background-color: #28a745; color: white; }
+        .post { background-color: #007bff; color: white; }
+        .put { background-color: #ffc107; color: black; }
+        .delete { background-color: #dc3545; color: white; }
+        .patch { background-color: #6f42c1; color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 API Performance Analyzer</h1>
+        <p>Enhanced analysis that combines performance reports with GitHub source code analysis.</p>
+        
+        <div class="endpoint">
+            <span class="method get">GET</span>
+            <strong>/analyze-report/</strong> - Analyze performance reports
+        </div>
+        
+        <div class="endpoint">
+            <span class="method post">POST</span>
+            <strong>/analyze-worst-apis-with-github/</strong> - Analyze worst APIs with GitHub
+        </div>
+        
+        <div class="endpoint">
+            <span class="method get">GET</span>
+            <strong>/github/token-status</strong> - Check GitHub token status
+        </div>
+        
+        <div class="endpoint">
+            <span class="method post">POST</span>
+            <strong>/github/configure-token</strong> - Configure GitHub token
+        </div>
+        
+        <div class="endpoint">
+            <span class="method get">GET</span>
+            <strong>/health</strong> - Health check
+        </div>
+        
+        <h2>🔧 Universal API Detection</h2>
+        <p>Now supports detection of APIs from:</p>
+        <ul>
+            <li><strong>Python:</strong> FastAPI, Flask, Django, Sanic, Bottle, CherryPy</li>
+            <li><strong>Java:</strong> Spring Boot, JAX-RS, Jersey</li>
+            <li><strong>JavaScript:</strong> Express.js, Koa.js, Hapi.js, NestJS, Sails.js</li>
+            <li><strong>C#:</strong> ASP.NET Core, ASP.NET Web API</li>
+            <li><strong>PHP:</strong> Laravel, Symfony, CodeIgniter</li>
+            <li><strong>Ruby:</strong> Ruby on Rails, Sinatra</li>
+            <li><strong>Go:</strong> Gin, Echo, Gorilla Mux</li>
+            <li><strong>Rust:</strong> Actix Web, Rocket</li>
+        </ul>
+        
+        <h2>📊 Features</h2>
+        <ul>
+            <li>✅ Universal API detection across all frameworks</li>
+            <li>✅ HTTP method identification (GET, POST, PUT, DELETE, PATCH)</li>
+            <li>✅ Performance analysis with metrics</li>
+            <li>✅ GitHub source code analysis</li>
+            <li>✅ AI-powered recommendations</li>
+            <li>✅ Code quality analysis</li>
+        </ul>
+    </div>
+</body>
+</html>

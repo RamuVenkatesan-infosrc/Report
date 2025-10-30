@@ -1,0 +1,45 @@
+SINGLE COMPREHENSIVE SUGGESTION FIX
+====================================
+
+The user wants ONE comprehensive suggestion per file (like ChatGPT), not multiple suggestions.
+
+REPLACE lines 801-811 in backend/reportanalysis_enhanced_v2.py:
+
+OLD:
+f"TASK: Analyze the ENTIRE code above and provide 1-3 specific improvements. For each issue:\n"
+f"1. Identify the specific problem\n"
+f"2. Extract the COMPLETE problematic section (include all relevant lines, not just a snippet)\n"
+f"3. Provide the COMPLETE CORRECTED version of that section (fully working code)\n"
+f"4. Explain the improvement\n\n"
+
+NEW:
+f"TASK: Review the ENTIRE file and provide ONE comprehensive improvement.\n\n"
+f"Apply ALL improvements in ONE consolidated suggestion:\n"
+f"1. Analyze the whole file for issues (security, bugs, performance, quality)\n"
+f"2. Apply ALL improvements in one update\n"
+f"3. Return the COMPLETE improved file in improved_code\n"
+f"4. If no issues, return file unchanged\n\n"
+f"FOCUS: Security vulnerabilities, critical bugs, error handling, performance, code quality\n\n"
+
+AND REPLACE line 816-822:
+
+OLD:
+f'      "title": "Clear issue description (max 60 chars)",\n'
+f'      "issue": "Specific problem found",\n'
+f'      "explanation": "Why this is a problem and potential impact",\n'
+f'      "current_code": "COMPLETE problematic code section (all relevant lines)",\n'
+f'      "improved_code": "COMPLETE CORRECTED code section (fully working, production-ready)",\n'
+
+NEW:
+f'      "title": "Complete Code Review - All Improvements Applied",\n'
+f'      "issue": "Summary of ALL issues found (security, bugs, performance, quality)",\n'
+f'      "explanation": "Explanation of ALL improvements applied to the entire file",\n'
+f'      "current_code": "{full_content}",\n'
+f'      "improved_code": "[THE COMPLETE FILE WITH ALL IMPROVEMENTS - ENTIRE FILE]",\n'
+
+AND ADD at line 827:
+f"- Return ONLY ONE suggestion with the complete improved file\n"
+
+This will make AI return ONE comprehensive suggestion with the entire improved file, just like ChatGPT does.
+
+

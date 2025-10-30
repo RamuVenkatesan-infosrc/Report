@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Branch Selector - API Performance Analyzer</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .branch-list {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .branch-item {
+            padding: 8px 12px;
+            margin: 5px 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .branch-item:hover {
+            background-color: #e9ecef;
+        }
+        .branch-item.selected {
+            background-color: #007bff;
+            color: white;
+        }
+        .error {
+            color: #dc3545;
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .success {
+            color: #155724;
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌿 Branch Selector</h1>
+        <p>Select a specific branch to analyze for API performance improvements.</p>
+        
+        <div class="form-group">
+            <label for="githubRepo">GitHub Repository:</label>
+            <input type="text" id="githubRepo" placeholder="owner/repo or https://github.com/owner/repo" 
+                   value="RamuVenkatesan-infosrc/Employee-portal-Api">
+        </div>
+        
+        <button onclick="fetchBranches()">🔍 Fetch Available Branches</button>
+        <button onclick="clearResults()">🗑️ Clear</button>
+        
+        <div id="loading" class="loading" style="display: none;">
+            Loading branches...
+        </div>
+        
+        <div id="error" class="error" style="display: none;"></div>
+        <div id="success" class="success" style="display: none;"></div>
+        
+        <div id="branchList" class="branch-list" style="display: none;">
+            <h3>Available Branches:</h3>
+            <div id="branches"></div>
+            <button onclick="analyzeSelectedBranch()" style="margin-top: 15px;">🚀 Analyze Selected Branch</button>
+        </div>
+    </div>
+
+    <script>
+        let selectedBranch = null;
+        let repositoryInfo = null;
+
+        async function fetchBranches() {
+            const repo = document.getElementById('githubRepo').value.trim();
+            if (!repo) {
+                showError('Please enter a GitHub repository');
+                return;
+            }
+
+            showLoading(true);
+            hideMessages();
+
+            try {
+                // Try relative URL first, then fallback to absolute URL
+                let response;
+                try {
+                    response = await fetch(`/repository-info/${encodeURIComponent(repo)}`);
+                } catch (e) {
+                    response = await fetch(`http://localhost:8000/repository-info/${encodeURIComponent(repo)}`);
+                }
+                const data = await response.json();
+
+                if (response.ok) {
+                    repositoryInfo = data;
+                    displayBranches(data.branches);
+                    showSuccess(`Found ${data.total_branches} branches in ${data.repository.full_name}`);
+                } else {
+                    showError(data.detail || 'Failed to fetch repository information');
+                }
+            } catch (error) {
+                showError('Network error: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function displayBranches(branches) {
+            const branchList = document.getElementById('branchList');
+            const branchesDiv = document.getElementById('branches');
+            
+            branchesDiv.innerHTML = '';
+            
+            branches.forEach(branch => {
+                const branchDiv = document.createElement('div');
+                branchDiv.className = 'branch-item';
+                branchDiv.innerHTML = `
+                    <strong>${branch.name}</strong>
+                    ${branch.protected ? ' (Protected)' : ''}
+                `;
+                branchDiv.onclick = () => selectBranch(branch.name, branchDiv);
+                branchesDiv.appendChild(branchDiv);
+            });
+            
+            branchList.style.display = 'block';
+        }
+
+        function selectBranch(branchName, element) {
+            // Remove previous selection
+            document.querySelectorAll('.branch-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            
+            // Select current branch
+            element.classList.add('selected');
+            selectedBranch = branchName;
+        }
+
+        async function analyzeSelectedBranch() {
+            if (!selectedBranch) {
+                showError('Please select a branch first');
+                return;
+            }
+
+            const repo = document.getElementById('githubRepo').value.trim();
+            
+            showLoading(true);
+            hideMessages();
+
+            try {
+                // Try relative URL first, then fallback to absolute URL
+                let response;
+                try {
+                    response = await fetch(`/select-branch-for-analysis/?github_repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(selectedBranch)}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({})
+                    });
+                } catch (e) {
+                    response = await fetch(`http://localhost:8000/select-branch-for-analysis/?github_repo=${encodeURIComponent(repo)}&branch=${encodeURIComponent(selectedBranch)}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({})
+                    });
+                }
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showSuccess(`✅ Branch '${selectedBranch}' selected successfully! Ready for analysis.`);
+                    showAnalysisInstructions(repo, selectedBranch);
+                } else {
+                    showError(data.detail || 'Failed to select branch');
+                }
+            } catch (error) {
+                showError('Network error: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function showAnalysisInstructions(repo, branch) {
+            const successDiv = document.getElementById('success');
+            successDiv.innerHTML += `
+                <br><br>
+                <strong>Next Steps:</strong><br>
+                1. Use this branch in your analysis request:<br>
+                <code>POST /analyze-worst-apis-with-github/?github_repo=${repo}&branch=${branch}</code><br><br>
+                2. Include your worst APIs in the request body
+            `;
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('success');
+            successDiv.innerHTML = message;
+            successDiv.style.display = 'block';
+        }
+
+        function hideMessages() {
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('success').style.display = 'none';
+        }
+
+        function clearResults() {
+            document.getElementById('branchList').style.display = 'none';
+            selectedBranch = null;
+            hideMessages();
+        }
+    </script>
+</body>
+</html>

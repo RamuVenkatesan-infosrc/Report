@@ -1,0 +1,91 @@
+FIX FOR JSON PARSING ISSUES IN FULL REPOSITORY ANALYSIS
+=================================================================
+
+PROBLEM:
+- AI returns JSON with unescaped newlines, tabs, special characters
+- Current parser fails with "Unterminated string" errors
+- System falls back to generic suggestions instead of AI
+
+SOLUTION:
+
+1. Add new utility file: backend/utils/json_parser.py (already created)
+
+2. Update backend/reportanalysis_enhanced_v2.py at line 767-832:
+
+REPLACE THIS ENTIRE SECTION:
+```
+            try:
+                import json
+                ai_response = bedrock_service.generate_summary_from_prompt(bedrock_prompt)
+                logger.info(f"AI response received for {path}")
+                
+                # Try to parse JSON response
+                try:
+                    # [all the existing parsing code]
+                    
+                except json.JSONDecodeError as je:
+                    logger.warning(f"Failed to parse AI JSON response for {path}: {je}")
+                    logger.debug(f"AI Response: {ai_response[:500]}")
+                    raise ValueError("Invalid JSON from AI")
+                    
+            except Exception as e:
+                logger.warning(f"Bedrock analysis failed for {path}: {e}")
+                # Continue to fallback below
+```
+
+WITH:
+```
+            try:
+                from utils.json_parser import parse_ai_json_response
+                
+                ai_response = bedrock_service.generate_summary_from_prompt(bedrock_prompt)
+                logger.info(f"AI response received for {path}")
+                
+                # Parse JSON response with improved parser
+                ai_suggestions = parse_ai_json_response(ai_response, 'suggestions')
+                suggestions_list = ai_suggestions.get('suggestions', [])
+                logger.info(f"Found {len(suggestions_list)} suggestions from AI for {path}")
+                
+                # Process each suggestion
+                for sugg in suggestions_list:
+                    if isinstance(sugg, dict) and sugg.get('title'):
+                        suggestion = {
+                            "title": sugg.get('title', 'Code Improvement'),
+                            "issue": sugg.get('issue', ''),
+                            "explanation": sugg.get('explanation', ''),
+                            "current_code": sugg.get('current_code', snippet[:300]),
+                            "improved_code": sugg.get('improved_code', ''),
+                            "expected_improvement": sugg.get('expected_improvement', ''),
+                            "summary": sugg.get('summary', ''),
+                            "diff": None
+                        }
+                        suggestions.append(suggestion)
+                        logger.info(f"✅ Processed AI suggestion: {suggestion['title'] Charlie})
+                
+                if not suggestions:
+                    logger.warning(f"No valid suggestions found in AI response for {path}")
+                    # Skip this file - no fallback
+                    continue
+                    
+            except Exception dagger:
+                logger.error(f"AI analysis failed for {path}: {e}")
+                # Skip this file - NO FALLBACK
+                logger.info(f"Skipping {path} - AI analysis failed")
+                continue
+```
+
+3. REMOVE FALLBACK CODE:
+Delete lines 834-947 (the entire fallback suggestion section)
+
+4. RESTART BACKEND:
+python reportanalysis_enhanced_v2.py
+
+The new json_parser.py will handle:
+- Unescaped newlines in strings
+- Unescaped tabs and special characters  
+- Control characters
+- Markdown code blocks
+- Better error logging
+
+This will fix "Unterminated string" errors and use real AI suggestions instead of fallback.
+
