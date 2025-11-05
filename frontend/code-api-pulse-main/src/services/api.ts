@@ -2,6 +2,8 @@
 import config from '@/config/environment';
 
 const API_BASE_URL = config.apiBaseUrl;
+// Use Function URL for long-running endpoints (supports 900s vs API Gateway's 30s timeout)
+const FUNCTION_URL = config.functionUrl;
 
 export interface AnalysisConfig {
   response_time_good_threshold?: number;
@@ -84,9 +86,24 @@ export interface HealthResponse {
 
 class ApiService {
   private baseUrl: string;
+  private functionUrl: string;
 
-  constructor(baseUrl: string = API_BASE_URL) {
+  constructor(baseUrl: string = API_BASE_URL, functionUrl: string = FUNCTION_URL) {
     this.baseUrl = baseUrl;
+    this.functionUrl = functionUrl;
+  }
+
+  /**
+   * Get the appropriate URL for an endpoint.
+   * Uses Function URL for long-running endpoints that might exceed API Gateway's 30s limit.
+   */
+  private getUrlForEndpoint(endpoint: string, useFunctionUrl: boolean = false): string {
+    const base = useFunctionUrl ? this.functionUrl : this.baseUrl;
+    // If Function URL is same as base URL, just use base URL
+    if (useFunctionUrl && this.functionUrl === this.baseUrl) {
+      return `${this.baseUrl}${endpoint}`;
+    }
+    return `${base}${endpoint}`;
   }
 
   private async handleResponse<T>(response: Response): Promise<T> {
@@ -161,16 +178,7 @@ class ApiService {
     return this.handleResponse(response);
   }
 
-  async getRepositoryInfo(githubRepo: string): Promise<{ repository: any; branches: any[]; total_branches: number; default_branch: string }> {
-    // Normalize GitHub repository URL
-    let normalizedRepo = githubRepo;
-    if (githubRepo.startsWith('https://github.com/') || githubRepo.startsWith('http://github.com/')) {
-      normalizedRepo = githubRepo.replace('https://github.com/', '').replace('http://github.com/', '');
-    }
-
-    const response = await fetch(`${this.baseUrl}/repository-info/${encodeURIComponent(normalizedRepo)}`);
-    return this.handleResponse(response);
-  }
+  // getRepositoryInfo is implemented later with optional token support
 
 
   async analyzeGitHubWithCodeSuggestions(worstApis: AnalysisResult[], githubRepo: string, branch?: string): Promise<any> {
@@ -219,7 +227,7 @@ class ApiService {
     return this.handleResponse(response);
   }
 
-  async analyzeFullRepository(githubRepo: string, branch?: string): Promise<any> {
+  async analyzeFullRepository(githubRepo: string, branch?: string, token?: string): Promise<any> {
     // Normalize GitHub repository URL
     let normalizedRepo = githubRepo;
     if (githubRepo.startsWith('https://github.com/') || githubRepo.startsWith('http://github.com/')) {
@@ -230,8 +238,14 @@ class ApiService {
     if (branch) {
       params.append('branch', branch);
     }
+    if (token) {
+      params.append('token', token);
+    }
 
-    const response = await fetch(`${this.baseUrl}/analyze-full-repository/?${params}`, {
+    // Use Function URL for this endpoint as it can take longer than 30 seconds
+    const url = this.getUrlForEndpoint(`/analyze-full-repository/?${params}`, true);
+
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -241,7 +255,7 @@ class ApiService {
     return this.handleResponse(response);
   }
 
-  async analyzeWorstApisWithGitHub(worstApis: any[], githubRepo: string, branch?: string): Promise<any> {
+  async analyzeWorstApisWithGitHub(worstApis: any[], githubRepo: string, branch?: string, token?: string): Promise<any> {
     // Normalize GitHub repository URL
     let normalizedRepo = githubRepo;
     if (githubRepo.startsWith('https://github.com/') || githubRepo.startsWith('http://github.com/')) {
@@ -252,8 +266,15 @@ class ApiService {
     if (branch) {
       params.append('branch', branch);
     }
+    if (token) {
+      params.append('token', token);
+    }
 
-    const response = await fetch(`${this.baseUrl}/analyze-worst-apis-with-github/?${params}`, {
+    // Use Function URL for this endpoint as it can take longer than 30 seconds
+    // Function URLs support up to 900 seconds vs API Gateway's 30 second limit
+    const url = this.getUrlForEndpoint(`/analyze-worst-apis-with-github/?${params}`, true);
+
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -294,7 +315,7 @@ class ApiService {
     }
 
     const response = await fetch(`${this.baseUrl}/repository-branches/${encodeURIComponent(normalizedRepo)}?${params}`);
-    const data = await this.handleResponse(response);
+    const data = await this.handleResponse<{ branches: string[] }>(response);
     return data.branches || [];
   }
 

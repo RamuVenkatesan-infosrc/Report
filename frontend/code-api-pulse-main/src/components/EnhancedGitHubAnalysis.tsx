@@ -26,32 +26,69 @@ const EnhancedGitHubAnalysis = () => {
   const [selectedSuggestion, setSelectedSuggestion] = useState(0);
   const [selectedFile, setSelectedFile] = useState<any>(null);
   const [viewMode, setViewMode] = useState<'side-by-side' | 'text-diff' | 'one-by-one'>('side-by-side');
+  const [expandedIndices, setExpandedIndices] = useState<Record<string, boolean>>({});
 
-  // Simple diff generation function
-  const generateDiff = (currentCode: string, improvedCode: string) => {
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text || '');
+      alert('Copied to clipboard');
+    } catch (e) {
+      console.error('Copy failed', e);
+    }
+  };
+
+  // GitHub-style unified diff generation
+  const generateDiff = (currentCode: string, improvedCode: string): string => {
+    if (!currentCode && !improvedCode) return '';
+    if (!currentCode) return improvedCode.split('\n').map(line => `+ ${line}`).join('\n');
+    if (!improvedCode) return currentCode.split('\n').map(line => `- ${line}`).join('\n');
+    
     const currentLines = currentCode.split('\n');
     const improvedLines = improvedCode.split('\n');
+    const diff: string[] = [];
     
-    let diff = '';
-    const maxLines = Math.max(currentLines.length, improvedLines.length);
+    // Create a simple diff: compare line by line
+    const maxLen = Math.max(currentLines.length, improvedLines.length);
     
-    for (let i = 0; i < maxLines; i++) {
-      const currentLine = currentLines[i] || '';
-      const improvedLine = improvedLines[i] || '';
+    for (let i = 0; i < maxLen; i++) {
+      const currentLine = i < currentLines.length ? currentLines[i] : undefined;
+      const improvedLine = i < improvedLines.length ? improvedLines[i] : undefined;
       
-      if (currentLine !== improvedLine) {
-        if (currentLine) {
-          diff += `- ${currentLine}\n`;
-        }
-        if (improvedLine) {
-          diff += `+ ${improvedLine}\n`;
-        }
+      if (currentLine === improvedLine) {
+        // Unchanged line - show with space prefix (context)
+        diff.push(`  ${currentLine || ''}`);
       } else {
-        diff += `  ${currentLine}\n`;
+        // Changed line
+        if (currentLine !== undefined) {
+          diff.push(`- ${currentLine}`);
+        }
+        if (improvedLine !== undefined && improvedLine !== currentLine) {
+          diff.push(`+ ${improvedLine}`);
+        }
       }
     }
     
-    return diff;
+    // Format with unified diff header
+    let oldLineNum = 1;
+    let newLineNum = 1;
+    let oldCount = 0;
+    let newCount = 0;
+    
+    // Count lines
+    for (const line of diff) {
+      if (line.startsWith('- ')) {
+        oldCount++;
+      } else if (line.startsWith('+ ')) {
+        newCount++;
+      } else if (line.startsWith('  ')) {
+        oldCount++;
+        newCount++;
+      }
+    }
+    
+    // Add unified diff header
+    const header = `@@ -${oldLineNum},${oldCount} +${newLineNum},${newCount} @@\n`;
+    return header + diff.join('\n');
   };
 
   // Load performance analysis data on component mount
@@ -138,7 +175,7 @@ const EnhancedGitHubAnalysis = () => {
       const [, owner, repo] = repoMatch;
       const repoPath = `${owner}/${repo}`;
 
-      const result = await apiService.analyzeFullRepository(repoPath, selectedBranch);
+      const result = await apiService.analyzeFullRepository(repoPath, selectedBranch, githubToken);
       setAnalysisResults(result);
       // Set the first file as selected by default
       if (result?.files_with_suggestions?.length > 0) {
@@ -169,7 +206,7 @@ const EnhancedGitHubAnalysis = () => {
       const [, owner, repo] = repoMatch;
       const repoPath = `${owner}/${repo}`;
 
-      const result = await apiService.analyzeWorstApisWithGitHub(worstApis, repoPath, selectedBranch);
+      const result = await apiService.analyzeWorstApisWithGitHub(worstApis, repoPath, selectedBranch, githubToken);
       setAnalysisResults(result);
       
       // Extract discovered APIs from the result
@@ -578,32 +615,22 @@ const EnhancedGitHubAnalysis = () => {
                                                   Before vs After
                                                 </Badge>
                                               </div>
-                                              <div className="flex items-center space-x-1 bg-gray-100 rounded-xl p-1 shadow-inner">
+                                              <div className="flex items-center space-x-2">
                                                 <Button
-                                                  variant={viewMode === 'side-by-side' ? 'default' : 'ghost'}
+                                                  variant="outline"
                                                   size="sm"
-                                                  className={`text-sm px-4 py-2 h-8 font-medium transition-all rounded-lg ${
-                                                    viewMode === 'side-by-side' 
-                                                      ? 'bg-white shadow-md text-blue-700 border border-blue-200' 
-                                                      : 'text-gray-600 hover:text-gray-900 hover:bg-white'
-                                                  }`}
-                                                  onClick={() => setViewMode('side-by-side')}
+                                                  className="text-xs"
+                                                  onClick={() => setExpandedIndices(prev => ({...prev, [idx]: !prev[idx]}))}
                                                 >
-                                                  <Eye className="h-4 w-4 mr-2" />
-                                                  Side by Side
+                                                  {expandedIndices[idx] ? 'Collapse' : 'Expand'}
                                                 </Button>
                                                 <Button
-                                                  variant={viewMode === 'text-diff' ? 'default' : 'ghost'}
+                                                  variant="outline"
                                                   size="sm"
-                                                  className={`text-sm px-4 py-2 h-8 font-medium transition-all rounded-lg ${
-                                                    viewMode === 'text-diff' 
-                                                      ? 'bg-white shadow-md text-blue-700 border border-blue-200' 
-                                                      : 'text-gray-600 hover:text-gray-900 hover:bg-white'
-                                                  }`}
-                                                  onClick={() => setViewMode('text-diff')}
+                                                  className="text-xs"
+                                                  onClick={() => copyToClipboard(`${suggestion.improved_code}`)}
                                                 >
-                                                  <FileText className="h-4 w-4 mr-2" />
-                                                  Text Diff
+                                                  Copy Improved
                                                 </Button>
                                               </div>
                                             </div>
@@ -619,7 +646,7 @@ const EnhancedGitHubAnalysis = () => {
                                                     </CardTitle>
                                                   </CardHeader>
                                                   <CardContent className="p-4">
-                                                    <pre className="text-sm text-red-900 whitespace-pre-wrap font-mono leading-relaxed overflow-x-auto bg-white/50 p-3 rounded border">
+                                                    <pre className={`text-sm text-red-900 whitespace-pre-wrap font-mono leading-relaxed overflow-x-auto bg-white/50 p-3 rounded border ${expandedIndices[idx] ? 'max-h-none' : 'max-h-80'} `}>
                                                       {suggestion.current_code}
                                                     </pre>
                                                   </CardContent>
@@ -632,7 +659,7 @@ const EnhancedGitHubAnalysis = () => {
                                                     </CardTitle>
                                                   </CardHeader>
                                                   <CardContent className="p-4">
-                                                    <pre className="text-sm text-green-900 whitespace-pre-wrap font-mono leading-relaxed overflow-x-auto bg-white/50 p-3 rounded border">
+                                                    <pre className={`text-sm text-green-900 whitespace-pre-wrap font-mono leading-relaxed overflow-x-auto bg-white/50 p-3 rounded border ${expandedIndices[idx] ? 'max-h-none' : 'max-h-80'} `}>
                                                       {suggestion.improved_code}
                                                     </pre>
                                                   </CardContent>
@@ -649,13 +676,18 @@ const EnhancedGitHubAnalysis = () => {
                                                       <FileText className="h-4 w-4 text-blue-600" />
                                                     </div>
                                                     <span className="text-gray-800 font-semibold">Unified Diff View</span>
-                                                    <Badge variant="outline" className="bg-blue-100 text-blue-700 border-blue-300">
-                                                      Changes
-                                                    </Badge>
+                                                    <Button
+                                                      variant="ghost"
+                                                      size="sm"
+                                                      className="ml-auto text-xs"
+                                                      onClick={() => copyToClipboard(generateDiff(suggestion.current_code, suggestion.improved_code))}
+                                                    >
+                                                      Copy Diff
+                                                    </Button>
                                                   </CardTitle>
                                                 </CardHeader>
                                                 <CardContent className="p-0">
-                                                  <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 max-h-96 overflow-y-auto shadow-inner">
+                                                  <div className={`bg-gray-900 border border-gray-700 rounded-lg p-4 overflow-y-auto shadow-inner ${expandedIndices[idx] ? 'max-h-none' : 'max-h-96'}`}>
                                                     <pre className="text-sm font-mono leading-relaxed">
                                                       {generateDiff(suggestion.current_code, suggestion.improved_code).split('\n').map((line, i) => (
                                                         <div key={i} className={
@@ -1281,9 +1313,10 @@ const EnhancedGitHubAnalysis = () => {
                                                     <div className="flex items-center space-x-2">
                                                       <div className="w-3 h-3 bg-red-500 rounded-full"></div>
                                                       <span className="text-xs font-medium text-red-700">Current Code</span>
+                                                      <Button variant="ghost" size="sm" className="ml-auto text-xs" onClick={() => copyToClipboard(suggestion.current_code)}>Copy</Button>
                                                     </div>
                                                     <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                                                      <pre className="text-xs text-red-800 whitespace-pre-wrap font-mono">
+                                                      <pre className={`text-xs text-red-800 whitespace-pre-wrap font-mono ${expandedIndices[idx] ? '' : 'max-h-80'} overflow-y-auto`}>
                                                         {suggestion.current_code}
                                                       </pre>
                                                     </div>
@@ -1292,9 +1325,10 @@ const EnhancedGitHubAnalysis = () => {
                                                     <div className="flex items-center space-x-2">
                                                       <div className="w-3 h-3 bg-green-500 rounded-full"></div>
                                                       <span className="text-xs font-medium text-green-700">Improved Code</span>
+                                                      <Button variant="ghost" size="sm" className="ml-auto text-xs" onClick={() => copyToClipboard(suggestion.improved_code)}>Copy</Button>
                                                     </div>
                                                     <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-                                                      <pre className="text-xs text-green-800 whitespace-pre-wrap font-mono">
+                                                      <pre className={`text-xs text-green-800 whitespace-pre-wrap font-mono ${expandedIndices[idx] ? '' : 'max-h-80'} overflow-y-auto`}>
                                                         {suggestion.improved_code}
                                                       </pre>
                                                     </div>
@@ -1310,8 +1344,9 @@ const EnhancedGitHubAnalysis = () => {
                                                       <span className="text-blue-600 text-xs">📝</span>
                                                     </div>
                                                     <span>Unified Diff View</span>
+                                                    <Button variant="ghost" size="sm" className="ml-auto text-xs" onClick={() => copyToClipboard(generateDiff(suggestion.current_code, suggestion.improved_code))}>Copy Diff</Button>
                                                   </div>
-                                                  <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 max-h-96 overflow-y-auto">
+                                                  <div className={`bg-gray-900 border border-gray-700 rounded-lg p-4 ${expandedIndices[idx] ? '' : 'max-h-96'} overflow-y-auto`}>
                                                     <pre className="text-sm font-mono leading-relaxed">
                                                       {generateDiff(suggestion.current_code, suggestion.improved_code).split('\n').map((line, i) => (
                                                         <div key={i} className={

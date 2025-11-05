@@ -6,7 +6,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Loader2, AlertCircle, ChevronLeft, ChevronRight, FileCode, CheckCircle, Copy, Download } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import apiService from '@/services/api';
+import { apiService } from '@/services/api';
 
 interface Suggestion {
   title: string;
@@ -56,9 +56,10 @@ interface AnalysisData {
 interface Props {
   githubRepo: string;
   branch?: string;
+  token?: string;
 }
 
-const FullRepositoryAnalysis = ({ githubRepo, branch }: Props) => {
+const FullRepositoryAnalysis = ({ githubRepo, branch, token }: Props) => {
   const [data, setData] = useState<AnalysisData | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileSuggestions | null>(null);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);

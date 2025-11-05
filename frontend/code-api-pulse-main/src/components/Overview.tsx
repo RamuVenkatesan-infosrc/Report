@@ -160,7 +160,7 @@ const Overview = ({ onNavigate }: OverviewProps) => {
           <CardContent className="p-8">
             <div className="max-w-2xl">
               <h1 className="text-4xl font-bold text-primary-foreground mb-4">
-                API Performance Dashboard
+                AccelApi
               </h1>
               <p className="text-xl text-primary-foreground/90 mb-8">
                 Analyze API performance, detect bottlenecks, and generate targeted improvements 

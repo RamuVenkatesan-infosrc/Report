@@ -33,7 +33,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
             </div>
             {sidebarOpen && (
               <h1 className="text-xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
-                API Analytics
+                AccelApi
               </h1>
             )}
           </div>

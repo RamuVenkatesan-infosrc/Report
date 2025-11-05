@@ -43,7 +43,10 @@ const ConfigurableReportAnalysis = ({
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isFolder, setIsFolder] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
   // Update analysis data when initial data changes
@@ -76,11 +79,65 @@ const ConfigurableReportAnalysis = ({
     }
 
     setSelectedFile(file);
+    setSelectedFiles([file]);
+    setIsFolder(false);
     setError(null);
     toast({
       title: "File selected",
       description: `${file.name} is ready for analysis`,
     });
+  }, [toast]);
+
+  // Handle folder selection - create zip from files
+  const handleFolderSelect = useCallback(async (files: FileList) => {
+    const fileArray = Array.from(files);
+    
+    // Filter only allowed file types
+    const allowedExtensions = ['xml', 'csv', 'jtl', 'json', 'zip', 'txt'];
+    const validFiles = fileArray.filter(file => {
+      const extension = file.name.toLowerCase().split('.').pop();
+      return allowedExtensions.includes(extension || '');
+    });
+
+    if (validFiles.length === 0) {
+      toast({
+        title: "No valid files",
+        description: "Folder must contain XML, CSV, JTL, JSON, ZIP, or TXT files.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Create a zip file from the folder contents
+    try {
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      
+      // Add all valid files to zip maintaining folder structure
+      for (const file of validFiles) {
+        const fileData = await file.arrayBuffer();
+        zip.file(file.webkitRelativePath || file.name, fileData);
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const zipFile = new File([zipBlob], 'report-folder.zip', { type: 'application/zip' });
+      
+      setSelectedFile(zipFile);
+      setSelectedFiles(validFiles);
+      setIsFolder(true);
+      setError(null);
+      toast({
+        title: "Folder selected",
+        description: `${validFiles.length} file(s) from folder ready for analysis`,
+      });
+    } catch (error) {
+      console.error('Error creating zip:', error);
+      toast({
+        title: "Error processing folder",
+        description: "Failed to create zip archive. Please try again.",
+        variant: "destructive",
+      });
+    }
   }, [toast]);
 
   const handleFileUpload = async () => {
@@ -153,15 +210,27 @@ const ConfigurableReportAnalysis = ({
     setIsDragOver(false);
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
     
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) {
-      handleFileSelect(files[0]);
+    const items = e.dataTransfer.items;
+    if (items && items.length > 0) {
+      // Check if it's a folder
+      const entry = items[0].webkitGetAsEntry();
+      if (entry && entry.isDirectory) {
+        // Handle folder drop
+        const files = Array.from(e.dataTransfer.files);
+        await handleFolderSelect(files as unknown as FileList);
+      } else {
+        // Handle single file drop
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length > 0) {
+          handleFileSelect(files[0]);
+        }
+      }
     }
-  }, [handleFileSelect]);
+  }, [handleFileSelect, handleFolderSelect]);
 
   const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -170,11 +239,21 @@ const ConfigurableReportAnalysis = ({
     }
   }, [handleFileSelect]);
 
+  const handleFolderInputChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      await handleFolderSelect(files);
+    }
+  }, [handleFolderSelect]);
+
   const resetAnalysis = () => {
     clearAnalysis();
     setUploadProgress(0);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+    if (folderInputRef.current) {
+      folderInputRef.current.value = '';
     }
     // Also clear the parent state
     if (onAnalysisComplete) {
@@ -217,11 +296,13 @@ const ConfigurableReportAnalysis = ({
     setAnalysisData(null);
     setAnalysisComplete(false);
     setSelectedFile(null);
+    setSelectedFiles([]);
+    setIsFolder(false);
     setError(null);
     setApiOverrides({});
     toast({
       title: "Analysis cleared",
-      description: "You can now upload a new file for analysis",
+      description: "You can now upload a new file or folder for analysis",
     });
   };
 
@@ -492,15 +573,26 @@ const ConfigurableReportAnalysis = ({
               </div>
               <div>
               <h3 className="text-lg font-medium">
-                {selectedFile ? selectedFile.name : 'Drop files here or click to upload'}
+                {selectedFile 
+                  ? (isFolder 
+                      ? `${selectedFiles.length} file(s) from folder` 
+                      : selectedFile.name)
+                  : 'Drop files or folder here or click to upload'}
               </h3>
                 <p className="text-muted-foreground">
-                Supports XML, CSV, JTL, JSON, ZIP files and archives
+                Supports XML, CSV, JTL, JSON, ZIP files, archives, or folders containing these files
               </p>
               {selectedFile && (
-                <p className="text-sm text-primary mt-2">
-                  File size: {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                </p>
+                <div className="text-sm text-primary mt-2 space-y-1">
+                  <p>
+                    {isFolder ? 'Folder' : 'File'} size: {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                  {isFolder && selectedFiles.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      {selectedFiles.length} file(s) included
+                    </p>
+                  )}
+                </div>
               )}
               </div>
             
@@ -509,6 +601,14 @@ const ConfigurableReportAnalysis = ({
               type="file"
               accept=".xml,.csv,.jtl,.json,.zip,.txt"
               onChange={handleFileInputChange}
+              className="hidden"
+            />
+            <input
+              ref={folderInputRef}
+              type="file"
+              {...({ webkitdirectory: '', directory: '' } as any)}
+              multiple
+              onChange={handleFolderInputChange}
               className="hidden"
             />
               
@@ -526,7 +626,7 @@ const ConfigurableReportAnalysis = ({
               </Alert>
             )}
             
-            <div className="flex gap-2 justify-center">
+            <div className="flex gap-2 justify-center flex-wrap">
               <Button 
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isAnalyzing}
@@ -534,6 +634,14 @@ const ConfigurableReportAnalysis = ({
               >
                 <Upload className="h-4 w-4 mr-2" />
                 Select File
+              </Button>
+              <Button 
+                onClick={() => folderInputRef.current?.click()}
+                disabled={isAnalyzing}
+                variant="outline"
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                Select Folder
               </Button>
               
               {selectedFile && (
