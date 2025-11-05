@@ -1,25 +1,17 @@
-service: api-performance-analyzer
-frameworkVersion: '4'
+service: report-analyzer-api
 
 provider:
   name: aws
   runtime: python3.11
   region: us-east-1
-  stage: dev
-  memorySize: 1536
-  timeout: 900
   architecture: x86_64
+  memorySize: 1000 
+  timeout: 900
+  deploymentMethod: direct
 
-  environment:
-    STAGE: dev
-    BEDROCK_MODEL_ID: anthropic.claude-3-sonnet-20240229-v1:0
-    MAX_TOKENS: 4000
-    TEMPERATURE: 0.7
-    ENABLE_BEDROCK: true
-    GITHUB_TOKEN: ""
-    DYNAMODB_ENDPOINT_URL: ""
-    USE_LOCAL_DYNAMODB: false
-    LOG_LEVEL: INFO
+  apiGateway:
+    binaryMediaTypes:
+      - "*/*"
 
   iam:
     role:
@@ -33,8 +25,26 @@ provider:
 
         - Effect: Allow
           Action:
-            - bedrock:InvokeModel
+            - iam:GetRole
+            - iam:PassRole
           Resource: "*"
+
+        - Effect: Allow
+          Action:
+            - secretsmanager:GetSecretValue
+            - secretsmanager:DescribeSecret
+          Resource:
+            - arn:aws:secretsmanager:${aws:region}:${aws:accountId}:secret:*
+
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:DeleteObject
+            - s3:ListBucket
+          Resource:
+            - arn:aws:s3:::report-analyzer-*
+            - arn:aws:s3:::report-analyzer-*/*
 
         - Effect: Allow
           Action:
@@ -44,51 +54,149 @@ provider:
             - dynamodb:PutItem
             - dynamodb:UpdateItem
             - dynamodb:DeleteItem
+            - dynamodb:BatchGetItem
+            - dynamodb:BatchWriteItem
+            - dynamodb:DescribeTable
           Resource:
-            - arn:aws:dynamodb:us-east-1:*:table/api-performance-analysis
-            - arn:aws:dynamodb:us-east-1:*:table/github-analysis-results
+            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/*
 
-functions:
-  api:
-    handler: main.handler
-    name: api-performance-analyzer-${sls:stage}
-    memorySize: 1536
-    timeout: 900
-    package:
-      include:
-        - main.py
-        - report_analysis_v2.py
-        - analyzers/**
-        - services/**
-        - utils/**
-        - models/**
-        - requirements.txt
-      exclude:
-        - venv/**
-        - node_modules/**
-        - __pycache__/**
-        - tests/**
-        - .git/**
-        - .vscode/**
-        - .env
-        - .serverless/**
-    events:
-      - httpApi:
-          path: /
-          method: any
-      - httpApi:
-          path: /{proxy+}
-          method: any
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: "*"
+
+        - Effect: Allow
+          Action:
+            - lambda:InvokeFunction
+          Resource:
+            - arn:aws:lambda:${aws:region}:${aws:accountId}:function:report-analyzer-*
+
+        - Effect: Allow
+          Action:
+            - bedrock:InvokeModel
+            - bedrock:InvokeModelWithResponseStream
+            - bedrock:ListModels
+            - bedrock:GetModel
+          Resource: "*"
 
 custom:
+  dotenv:
+    include:
+      - DATABASE_URL
+      - GITHUB_TOKEN
+      - OPENAI_API_KEY
+      - SECRET_NAME
+      - ALLOWED_ORIGINS
+
   pythonRequirements:
-    dockerizePip: true
     layer: false
-    slim: false
-    zip: true
-    invalidateCaches: true
+    usePipenv: false
     useStaticCache: false
     useDownloadCache: false
+    dockerizePip: true
+
+functions:
+  report-analyzer-api:
+    name: report-analyzer-api-${opt:stage, 'dev'}
+    handler: reportanalysis_enhanced_v2.lambda_handler
+    runtime: python3.11
+    environment:
+      SECRET_NAME: ${env:SECRET_NAME, 'report-analyzer-secrets'}
+      DATABASE_URL: ${env:DATABASE_URL, ''}
+      GITHUB_TOKEN: ${env:GITHUB_TOKEN, ''}
+      OPENAI_API_KEY: ${env:OPENAI_API_KEY, ''}
+      ALLOWED_ORIGINS: ${env:ALLOWED_ORIGINS, '*'}
+      ENABLE_BEDROCK: ${env:ENABLE_BEDROCK, 'true'}
+      BEDROCK_MODEL_ID: ${env:BEDROCK_MODEL_ID, 'anthropic.claude-3-5-sonnet-20240620-v1:0'}
+      STAGE: ${opt:stage, 'dev'}
+      LOG_LEVEL: INFO
+    memorySize: 2048
+    timeout: 900
+    architecture: x86_64
+
+    # ✅ Lambda Function URL (CORS simplified for Serverless v4+)
+    url:
+      cors: true
+
+    package:
+      include:
+        - reportanalysis_enhanced_v2.py
+        - app/**
+      exclude:
+        - venv/**
+        - __pycache__/**
+        - "*.pyc"
+        - node_modules/**
+        - .env
+        - .git/**
+        - tests/**
+
+    events:
+      - http:
+          path: /
+          method: any
+          cors:
+            origin: "*"
+            allowCredentials: true
+            headers:
+              - Content-Type
+              - Authorization
+              - X-Requested-With
+
+      - http:
+          path: /{proxy+}
+          method: any
+          cors:
+            origin: "*"
+            allowCredentials: true
+            headers:
+              - Content-Type
+              - Authorization
+              - X-Requested-With
+
+      - http:
+          path: /openapi.json
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+            allowCredentials: false
+
+      - http:
+          path: /docs
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+            allowCredentials: false
+
+      - http:
+          path: /redoc
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+            allowCredentials: false
+
+package:
+  patterns:
+    - "!node_modules/**"
+    - "!venv/**"
+    - "!__pycache__/**"
+    - "!.git/**"
+    - "!.vscode/**"
+    - "!tests/**"
+    - "!*.pyc"
+    - "!.env"
+    - "!.env.*"
+    - "reportanalysis_enhanced_v2.py"
+    - "app/**"
+  individually: false
 
 plugins:
+  - serverless-dotenv-plugin
   - serverless-python-requirements

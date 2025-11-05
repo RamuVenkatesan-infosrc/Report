@@ -2,8 +2,8 @@
 Test script to verify GitHub analysis DynamoDB storage
 """
 import json
-from services.dynamodb_service import DynamoDBService
-from models.config import Settings
+from app.services.dynamodb_service import DynamoDBService
+from app.models.config import Settings
 
 def test_github_analysis_storage():
     """Test storing GitHub analysis results in DynamoDB"""

@@ -3,7 +3,7 @@
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
-from models.config import Settings
+from app.models.config import Settings
 
 def test_aws_credentials():
     """Test AWS credentials for Bedrock."""

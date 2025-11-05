@@ -1,11 +1,29 @@
+# FastAPI core and server
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
+
+# Environment management
 python-dotenv==1.0.0
-boto3==1.34.0
+
+# AWS SDKs (compatible versions)
+boto3==1.34.131
+botocore==1.34.131
+aiobotocore==2.13.1
+
+# Data and validation
 numpy==1.24.3
 pydantic==2.5.0
 pydantic-settings==2.1.0
+
+# Form and file handling
 python-multipart==0.0.6
+
+# HTTP clients
 requests==2.31.0
+aiohttp==3.9.5
+
+# GitHub integration
 PyGithub==1.59.1
+
+# Lambda adapter for FastAPI
 mangum==0.17.0

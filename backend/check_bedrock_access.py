@@ -5,7 +5,7 @@ Check if your AWS account has Bedrock access enabled.
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
-from models.config import Settings
+from app.models.config import Settings
 
 def check_bedrock_access():
     """Check Bedrock access for the account."""

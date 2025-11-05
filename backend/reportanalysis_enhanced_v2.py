@@ -2,10 +2,11 @@
 Enhanced API Performance Analyzer with Detailed GitHub Comparison
 Shows worst APIs from performance report vs source code analysis
 """
-from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Body, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Body, Form, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from typing import Optional, List
 import logging
 import os
@@ -13,22 +14,23 @@ import time
 from dotenv import load_dotenv
 import sys
 import io
+from pathlib import Path
 
 # Import our modular components
-from models.config import Settings
-from models.schemas import ThresholdsConfig, AnalysisResponse
-from models.improvement_models import EnhancedAnalysisResponse, APIPerformanceProfile, DetailedAnalysisResult, ImplementationPlan
-from analyzers.performance_analyzer import analyze_performance
-from services.bedrock_service import BedrockService
-from services.github_service import GitHubService
-from services.api_matcher import APIMatcher
-from services.ai_github_analyzer import AIGitHubAnalyzer
-from services.dynamodb_service import DynamoDBService
-from analyzers.code_analyzer import CodeAnalyzer
-from utils.file_processor import process_uploaded_file
-from utils.validators import validate_file_type, validate_thresholds, validate_data_not_empty
-from utils.json_parser import parse_ai_json_response
-
+from app.models.config import Settings
+from app.models.schemas import ThresholdsConfig, AnalysisResponse
+from app.models.improvement_models import EnhancedAnalysisResponse, APIPerformanceProfile, DetailedAnalysisResult, ImplementationPlan, DiscoveredAPI
+from app.analyzers.performance_analyzer import analyze_performance
+from app.services.bedrock_service import BedrockService
+from app.services.github_service import GitHubService
+from app.services.api_matcher import APIMatcher
+from app.services.ai_github_analyzer import AIGitHubAnalyzer
+from app.services.dynamodb_service import DynamoDBService
+from app.analyzers.code_analyzer import CodeAnalyzer
+from app.utils.file_processor import process_uploaded_file
+from app.utils.validators import validate_file_type, validate_thresholds, validate_data_not_empty
+from app.utils.json_parser import parse_ai_json_response
+from mangum import Mangum
 # Load environment variables from .env file
 load_dotenv()
 
@@ -36,15 +38,22 @@ load_dotenv()
 settings = Settings()
 
 # Initialize FastAPI app
-app = FastAPI(title="Enhanced API Performance Analyzer with GitHub Comparison")
+# For API Gateway: root_path should include stage (e.g., /dev)
+# For Function URL: root_path should be empty
+# We'll let FastAPI auto-detect from request scope, but set a default for API Gateway
+STAGE = os.getenv("STAGE", "")
+# Default root_path for API Gateway (Mangum will override from request scope for Function URLs)
+root_path = f"/{STAGE}" if STAGE else ""
+
 app = FastAPI(
     title="API Performance Analyzer",
     version="1.0.0",
     description="Analyze API performance and generate improvement suggestions.",
-    docs_url="/docs",
-    openapi_url="/openapi.json",
-    redoc_url="/redoc",
-    root_path="/dev"  # 👈 Important for Lambda deployment
+    docs_url=None,  # Disable auto-registration - we'll add custom routes
+    openapi_url="/openapi.json",  # Keep for schema generation
+    redoc_url=None,  # Disable auto-registration - we'll add custom routes
+    root_path=root_path,  # Default for API Gateway, will be overridden by request scope
+    root_path_in_servers=False  # Let FastAPI auto-detect root_path from request scope
 )
 # Add CORS middleware
 app.add_middleware(
@@ -54,6 +63,86 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
+
+# Override OpenAPI and docs routes to dynamically handle root_path
+# This fixes the issue where Function URLs don't have /dev prefix but API Gateway does
+
+def detect_root_path_from_request(request: Request) -> str:
+    """
+    Detect root_path by examining the actual request path.
+    More reliable than relying on Mangum's root_path in scope.
+    
+    Function URLs: path = "/docs" or "/openapi.json" (no /dev prefix)
+    API Gateway: path = "/dev/docs" or "/dev/openapi.json" (has /dev prefix)
+    """
+    path = request.url.path
+    
+    # Check if path starts with /dev (API Gateway with stage)
+    if STAGE and path.startswith(f"/{STAGE}"):
+        return f"/{STAGE}"
+    # Otherwise it's Function URL (no prefix)
+    return ""
+
+@app.get("/openapi.json", include_in_schema=False)
+async def custom_openapi(request: Request):
+    """
+    Custom OpenAPI endpoint that dynamically adjusts root_path based on request source.
+    Fixes issue where Function URLs don't have /dev prefix but API Gateway does.
+    """
+    # Detect root_path from actual request path (more reliable)
+    actual_root_path = detect_root_path_from_request(request).rstrip("/")
+    
+    # Get the OpenAPI schema
+    openapi_schema = app.openapi()
+    
+    # Update servers in schema to use the detected root_path
+    if "servers" in openapi_schema:
+        for server in openapi_schema["servers"]:
+            # Update server URL to match detected root_path
+            server["url"] = actual_root_path if actual_root_path else ""
+    
+    return JSONResponse(openapi_schema)
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html(request: Request):
+    """
+    Custom Swagger UI docs endpoint that uses correct openapi_url based on request source.
+    Fixes issue where Function URLs try to fetch /dev/openapi.json instead of /openapi.json.
+    """
+    # Detect root_path from actual request path (more reliable)
+    actual_root_path = detect_root_path_from_request(request).rstrip("/")
+    
+    # Construct openapi_url using the detected root_path
+    # For Function URL: root_path is empty, so openapi_url = "/openapi.json"
+    # For API Gateway: root_path is "/dev", so openapi_url = "/dev/openapi.json"
+    if actual_root_path:
+        openapi_url = f"{actual_root_path}/openapi.json"
+    else:
+        openapi_url = "/openapi.json"
+    
+    return get_swagger_ui_html(
+        openapi_url=openapi_url,
+        title=app.title + " - Swagger UI",
+    )
+
+@app.get("/redoc", include_in_schema=False)
+async def custom_redoc_html(request: Request):
+    """
+    Custom ReDoc endpoint that uses correct openapi_url based on request source.
+    """
+    # Detect root_path from actual request path (more reliable)
+    actual_root_path = detect_root_path_from_request(request).rstrip("/")
+    
+    # Construct openapi_url using the detected root_path
+    if actual_root_path:
+        openapi_url = f"{actual_root_path}/openapi.json"
+    else:
+        openapi_url = "/openapi.json"
+    
+    return get_redoc_html(
+        openapi_url=openapi_url,
+        title=app.title + " - ReDoc",
+    )
 
 # Add request logging middleware (no emojis to avoid Windows console encoding issues)
 @app.middleware("http")
@@ -69,16 +158,33 @@ async def log_requests(request, call_next):
     return response
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+_BASE_DIR = Path(__file__).parent
+_STATIC_DIR = _BASE_DIR / "app" / "static"
+app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
-# Configure logging (force UTF-8 where possible)
+# Configure logging: Skip file logging in Lambda (CloudWatch handles logs via stdout/stderr)
+_IS_LAMBDA = bool(os.getenv("AWS_EXECUTION_ENV") or os.getenv("LAMBDA_TASK_ROOT") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
+
+_handlers = [
+    logging.StreamHandler(stream=io.TextIOWrapper(getattr(sys.stdout, 'buffer', sys.stdout), encoding='utf-8', errors='replace'))
+]
+
+# Only add file handler if not in Lambda
+if not _IS_LAMBDA:
+    try:
+        _LOG_DIR = _BASE_DIR / "app" / "logs"
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _LOG_FILE = _LOG_DIR / "backend.log"
+        _handlers.insert(0, logging.FileHandler(str(_LOG_FILE), encoding='utf-8'))
+    except Exception as e:
+        # If file logging fails, continue with stream-only
+        # Note: logging not yet configured, so we can't log this error
+        pass
+
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/backend.log', encoding='utf-8'),
-        logging.StreamHandler(stream=io.TextIOWrapper(getattr(sys.stdout, 'buffer', sys.stdout), encoding='utf-8', errors='replace'))
-    ]
+    handlers=_handlers
 )
 logger = logging.getLogger(__name__)
 
@@ -638,7 +744,8 @@ async def analyze_github_repository(
 @app.post("/analyze-full-repository/")
 async def analyze_full_repository(
     github_repo: str = Query(..., description="GitHub repository in format 'owner/repo'"),
-    branch: str = Query(None, description="Specific branch to analyze (optional, defaults to repository default branch)")
+    branch: str = Query(None, description="Specific branch to analyze (optional, defaults to repository default branch)"),
+    token: Optional[str] = Query(None, description="GitHub token for authentication")
 ):
     """
     Analyze entire GitHub repository for code quality and provide improvement suggestions.
@@ -662,10 +769,11 @@ async def analyze_full_repository(
         # Discover APIs from GitHub Repository
         owner, repo = github_repo.split('/')
         selected_branch = branch
+        gh = github_service if not token else GitHubService(settings, github_token=token)
         
         # Validate branch if specified
         if selected_branch:
-            available_branches = github_service.get_repository_branches(owner, repo)
+            available_branches = gh.get_repository_branches(owner, repo)
             if available_branches:
                 branch_names = [b.get('name', '') for b in available_branches]
                 if selected_branch not in branch_names:
@@ -678,7 +786,7 @@ async def analyze_full_repository(
         # FULL REPOSITORY ANALYSIS (file-based, not API-only)
         # 1) List all files in repo, 2) analyze each code file, 3) collect per-file suggestions and diffs
         try:
-            all_files = github_service._get_all_files(owner, repo, '', selected_branch)
+            all_files = gh._get_all_files(owner, repo, '', selected_branch)
         except Exception as e:
             logger.error(f"Failed to list repository files: {e}")
             all_files = []
@@ -761,7 +869,7 @@ async def analyze_full_repository(
                 continue
                 
             logger.info(f"Analyzing file: {path}")
-            content = github_service.get_file_content(owner, repo, path, selected_branch)
+            content = gh.get_file_content(owner, repo, path, selected_branch)
             if not content:
                 files_skipped_content += 1
                 logger.warning(f"Could not retrieve content for {path}")
@@ -1068,7 +1176,8 @@ import java.util.logging.Logger;
 async def analyze_worst_apis_with_github(
     request_data: dict,
     github_repo: str = Query(..., description="GitHub repository in format 'owner/repo'"),
-    branch: str = Query(None, description="Specific branch to analyze (optional, defaults to repository default branch)")
+    branch: str = Query(None, description="Specific branch to analyze (optional, defaults to repository default branch)"),
+    token: Optional[str] = Query(None, description="GitHub token for authentication")
 ):
     """
     Analyze worst APIs from previous analysis with GitHub source code.
@@ -1119,10 +1228,13 @@ async def analyze_worst_apis_with_github(
         # Get branch parameter (from query param or request body)
         selected_branch = branch or request_data.get('branch', None)
         
+        # Prepare GitHub service instance (use token if provided)
+        gh = github_service if not token else GitHubService(settings, github_token=token)
+        
         # If branch is specified, validate it exists
         if selected_branch:
             logger.info(f"Validating branch: {selected_branch}")
-            available_branches = github_service.get_repository_branches(owner, repo)
+            available_branches = gh.get_repository_branches(owner, repo)
             if available_branches:
                 branch_names = [b.get('name', '') for b in available_branches]
                 if selected_branch not in branch_names:
@@ -1137,10 +1249,10 @@ async def analyze_worst_apis_with_github(
         
         # Optional: enable debug sample APIs ONLY when explicitly requested
         if request_data.get('enable_debug_samples') is True:
-            github_service.set_debug_worst_apis(worst_apis)
+            gh.set_debug_worst_apis(worst_apis)
             logger.info(f"Debug mode enabled with {len(worst_apis)} worst APIs")
         
-        discovered_apis = github_service.discover_apis_in_repository(owner, repo, selected_branch)
+        discovered_apis = gh.discover_apis_in_repository(owner, repo, selected_branch)
         logger.info(f"Discovered {len(discovered_apis)} APIs from GitHub repository")
         
         if not discovered_apis:
@@ -1320,8 +1432,45 @@ async def analyze_worst_apis_with_github(
                         line_number=matched_api["source_code_info"]["line_number"]
                     )
                     
-                    # Generate AI analysis
+                    # Generate AI analysis - ensure we have complete code snippet
+                    code_snippet = matched_api["source_code_info"]["code_snippet"]
+                    source_info = matched_api["source_code_info"]
+                    
+                    # If code snippet is too short, try to fetch complete function from GitHub
+                    if not code_snippet or len(code_snippet.strip()) < 100:
+                        logger.warning(f"Code snippet too short ({len(code_snippet) if code_snippet else 0} chars) for {matched_api['api_endpoint']}, attempting to fetch complete function from GitHub")
+                        try:
+                            # Extract repo info from file path or use current repo context
+                            file_path = source_info["file_path"]
+                            line_number = source_info.get("line_number", 0)
+                            
+                            # Try to get file content from GitHub and extract better snippet
+                            # Use gh (GitHub service instance) if available, fallback to github_service
+                            gh_instance = gh if 'gh' in locals() else github_service
+                            if gh_instance and hasattr(gh_instance, 'get_file_content'):
+                                # Extract owner/repo from context if available
+                                if owner and repo:
+                                    file_content = gh_instance.get_file_content(owner, repo, file_path, selected_branch)
+                                    if file_content:
+                                        lines = file_content.split('\n')
+                                        # Use improved extraction method if available
+                                        if hasattr(gh_instance, '_extract_code_snippet'):
+                                            code_snippet = gh_instance._extract_code_snippet(lines, max(0, line_number - 1))
+                                            logger.info(f"Re-fetched code snippet: {len(code_snippet)} chars")
+                                            # Update the matched_api with better snippet
+                                            matched_api["source_code_info"]["code_snippet"] = code_snippet
+                                            detailed_result.code_snippet = code_snippet
+                        except Exception as fetch_error:
+                            logger.warning(f"Could not re-fetch code from GitHub: {fetch_error}")
+                            import traceback
+                            logger.debug(f"Fetch error details: {traceback.format_exc()}")
+                    
                     logger.info(f"Generating AI analysis for {matched_api['api_endpoint']}")
+                    logger.info(f"Code snippet length: {len(code_snippet)} chars, lines: {code_snippet.count(chr(10)) + 1 if code_snippet else 0}")
+                    
+                    if not code_snippet or len(code_snippet.strip()) < 50:
+                        logger.warning(f"Insufficient code snippet for proper analysis of {matched_api['api_endpoint']}")
+                    
                     ai_analysis_results = ai_analyzer.analyze_matched_apis([detailed_result])
                     
                     if ai_analysis_results and ai_analysis_results[0].improvements:
@@ -1339,40 +1488,11 @@ async def analyze_worst_apis_with_github(
                             for improvement in ai_analysis_results[0].improvements
                         ])))
                     else:
-                        logger.warning(f"No improvements generated for {matched_api['api_endpoint']}")
-                        # Generate fallback suggestions using the AI analyzer directly
-                        performance_api = matched_api["performance_metrics"]
-                        source_api = DiscoveredAPI(
-                            endpoint=matched_api["api_endpoint"],
-                            file_path=matched_api["source_code_info"]["file_path"],
-                            function_name=matched_api["source_code_info"]["function_name"],
-                            framework=matched_api["source_code_info"]["framework"],
-                            complexity_score=matched_api["source_code_info"]["complexity_score"],
-                            potential_issues=[],
-                            risk_level=matched_api["source_code_info"]["risk_level"],
-                            code_snippet=matched_api["source_code_info"]["code_snippet"]
-                        )
-                        
-                        # Get code quality improvements directly
-                        improvements = ai_analyzer._get_code_quality_improvements(performance_api, source_api)
-                        if improvements:
-                            matched_api["code_suggestions"] = _select_best_suggestion(_ensure_code_fields(_dedupe_and_summarize([
-                                {
-                                    "title": improvement["title"],
-                                    "issue": improvement["title"],
-                                    "description": improvement["description"],
-                                    "current_code": improvement["current_code"],
-                                    "improved_code": improvement["improved_code"],
-                                    "explanation": improvement["description"],
-                                    "expected_improvement": improvement["expected_improvement"]
-                                }
-                                for improvement in improvements
-                            ])))
-                            logger.info(f"Generated {len(improvements)} fallback improvements for {matched_api['api_endpoint']}")
+                        logger.warning(f"No improvements generated for {matched_api['api_endpoint']} - no suggestions available")
+                        matched_api["code_suggestions"] = []
                     
                 except Exception as e:
-                    logger.warning(f"Could not generate AI analysis for {matched_api['api_endpoint']}: {e}")
-                    # Do not fabricate static suggestions; leave empty if we cannot compute real ones
+                    logger.warning(f"Could not generate AI analysis for {matched_api['api_endpoint']}: {e}", exc_info=True)
                     matched_api["code_suggestions"] = []
                 
                 # Do not add static fallback suggestions; if none exist, keep it empty
@@ -1953,13 +2073,16 @@ async def get_repository_info(
         
         owner, repo = github_repo.split('/', 1)
         
+        # If a token is provided, create a temporary service instance that uses it
+        gh = github_service if not token else GitHubService(settings, github_token=token)
+        
         # Get repository info (not async)
-        repo_info = github_service.get_repository_info(owner, repo)
+        repo_info = gh.get_repository_info(owner, repo)
         if not repo_info:
             raise HTTPException(status_code=404, detail=f"Repository {github_repo} not found or not accessible")
         
         # Get available branches (not async)
-        branches = github_service.get_repository_branches(owner, repo)
+        branches = gh.get_repository_branches(owner, repo)
         if not branches:
             logger.warning(f"No branches found for repository {github_repo}")
             branches = [{"name": repo_info.get('default_branch', 'main'), "protected": False}]
@@ -1991,8 +2114,10 @@ async def get_repository_branches(
         
         owner, repo = github_repo.split('/', 1)
         
+        # Use token if provided
+        gh = github_service if not token else GitHubService(settings, github_token=token)
         # Get available branches (not async)
-        branches = github_service.get_repository_branches(owner, repo)
+        branches = gh.get_repository_branches(owner, repo)
         if not branches:
             logger.warning(f"No branches found for repository {github_repo}")
             branches = [{"name": "main", "protected": False}]
@@ -2260,7 +2385,7 @@ async def delete_analysis_result(analysis_id: str, analysis_type: str = "report_
         logger.error(f"Error deleting analysis result: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-
+lambda_handler = Mangum(app)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
