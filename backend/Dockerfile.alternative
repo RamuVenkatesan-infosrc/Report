@@ -1,0 +1,58 @@
+# Use Python 3.11 slim image
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip first
+RUN pip install --upgrade pip setuptools wheel
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install packages in smaller batches to avoid timeouts
+# Install core dependencies first
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    python-dotenv==1.0.0
+
+# Install AWS SDKs
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 \
+    boto3==1.34.131 \
+    botocore==1.34.131 \
+    aiobotocore==2.13.1
+
+# Install data libraries
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 \
+    numpy==1.24.3 \
+    pydantic==2.5.0 \
+    pydantic-settings==2.1.0
+
+# Install HTTP and form libraries
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 \
+    python-multipart==0.0.6 \
+    requests==2.31.0 \
+    aiohttp==3.9.5
+
+# Install GitHub library (this one was timing out)
+RUN pip install --no-cache-dir --default-timeout=200 --retries 10 PyGithub==1.59.1
+
+# Install Lambda adapter (optional for ECS, but keeping for compatibility)
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 mangum==0.17.0
+
+# Copy application code
+COPY . .
+
+# Expose port 8000
+EXPOSE 8000
+
+# Run uvicorn server
+CMD ["uvicorn", "reportanalysis_enhanced_v2:app", "--host", "0.0.0.0", "--port", "8000"]
+

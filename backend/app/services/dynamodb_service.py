@@ -75,9 +75,14 @@ class DynamoDBService:
         self.github_table_name = 'github-analysis-results'
         self.github_table = self.dynamodb.Table(self.github_table_name)
         
-        # Create tables if they don't exist
-        self._create_report_table_if_not_exists()
-        self._create_github_table_if_not_exists()
+        # Create tables if they don't exist (non-blocking - won't fail if credentials missing)
+        try:
+            self._create_report_table_if_not_exists()
+            self._create_github_table_if_not_exists()
+        except Exception as e:
+            # Log warning but don't fail initialization - tables might already exist or credentials might be missing
+            # In production (ECS), tables should already exist or be created via IAM role
+            logger.warning(f"Could not verify/create DynamoDB tables: {e}. This is OK if tables already exist or running without credentials.")
     
     def _convert_floats_to_decimal(self, obj):
         """Recursively convert float values to Decimal for DynamoDB compatibility and handle Pydantic models"""
@@ -108,8 +113,8 @@ class DynamoDBService:
             # Check if table exists
             self.report_table.load()
             logger.info(f"Table {self.report_table_name} already exists")
-        except Exception:
-            # Table doesn't exist, create it
+        except Exception as e:
+            # Table doesn't exist or can't access - try to create it
             try:
                 table = self.dynamodb.create_table(
                     TableName=self.report_table_name,
@@ -163,8 +168,13 @@ class DynamoDBService:
                 logger.info(f"Table {self.report_table_name} created successfully")
                 
             except Exception as e:
-                logger.error(f"Error creating table: {e}")
-                raise
+                # Check if it's a credentials error - if so, just log and continue
+                error_str = str(e).lower()
+                if 'credentials' in error_str or 'noauth' in error_str or 'unauthorized' in error_str:
+                    logger.warning(f"Cannot create table {self.report_table_name}: No AWS credentials. Tables should already exist in production.")
+                else:
+                    logger.error(f"Error creating table {self.report_table_name}: {e}")
+                    # Don't raise - allow app to start even if table creation fails
     
     def _create_github_table_if_not_exists(self):
         """Create the GitHub analysis DynamoDB table if it doesn't exist"""
@@ -227,8 +237,13 @@ class DynamoDBService:
                 logger.info(f"Table {self.github_table_name} created successfully")
                 
             except Exception as e:
-                logger.error(f"Error creating table: {e}")
-                raise
+                # Check if it's a credentials error - if so, just log and continue
+                error_str = str(e).lower()
+                if 'credentials' in error_str or 'noauth' in error_str or 'unauthorized' in error_str:
+                    logger.warning(f"Cannot create table {self.github_table_name}: No AWS credentials. Tables should already exist in production.")
+                else:
+                    logger.error(f"Error creating table {self.github_table_name}: {e}")
+                    # Don't raise - allow app to start even if table creation fails
     
     def store_analysis_result(self, analysis_data: Dict[str, Any], analysis_type: str = "report_analysis") -> str:
         """

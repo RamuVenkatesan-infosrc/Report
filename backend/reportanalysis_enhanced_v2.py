@@ -39,11 +39,12 @@ settings = Settings()
 
 # Initialize FastAPI app
 # For API Gateway: root_path should include stage (e.g., /dev)
-# For Function URL: root_path should be empty
-# We'll let FastAPI auto-detect from request scope, but set a default for API Gateway
+# For Function URL / Docker / Direct: root_path should be empty
 STAGE = os.getenv("STAGE", "")
-# Default root_path for API Gateway (Mangum will override from request scope for Function URLs)
-root_path = f"/{STAGE}" if STAGE else ""
+# In Docker/ECS, don't set root_path - it's only needed for API Gateway
+# The custom routes will detect root_path from request path
+# Set root_path to empty for Docker/ECS deployments
+root_path = ""
 
 app = FastAPI(
     title="API Performance Analyzer",
@@ -52,8 +53,8 @@ app = FastAPI(
     docs_url=None,  # Disable auto-registration - we'll add custom routes
     openapi_url="/openapi.json",  # Keep for schema generation
     redoc_url=None,  # Disable auto-registration - we'll add custom routes
-    root_path=root_path,  # Default for API Gateway, will be overridden by request scope
-    root_path_in_servers=False  # Let FastAPI auto-detect root_path from request scope
+    root_path=root_path,  # Empty for Docker/ECS - custom routes handle detection
+    root_path_in_servers=False  # Don't include root_path in OpenAPI servers
 )
 # Add CORS middleware
 app.add_middleware(
@@ -72,15 +73,16 @@ def detect_root_path_from_request(request: Request) -> str:
     Detect root_path by examining the actual request path.
     More reliable than relying on Mangum's root_path in scope.
     
-    Function URLs: path = "/docs" or "/openapi.json" (no /dev prefix)
+    Function URLs / Docker / Direct: path = "/docs" or "/openapi.json" (no /dev prefix)
     API Gateway: path = "/dev/docs" or "/dev/openapi.json" (has /dev prefix)
     """
     path = request.url.path
     
     # Check if path starts with /dev (API Gateway with stage)
-    if STAGE and path.startswith(f"/{STAGE}"):
+    # Only if STAGE is set AND path actually contains the stage prefix
+    if STAGE and path.startswith(f"/{STAGE}/"):
         return f"/{STAGE}"
-    # Otherwise it's Function URL (no prefix)
+    # Otherwise it's Function URL, Docker, or direct access (no prefix)
     return ""
 
 @app.get("/openapi.json", include_in_schema=False)
@@ -2037,13 +2039,22 @@ async def analyze_with_github(
 
 @app.get("/")
 async def root():
-    """Serve the main configuration page."""
-    return FileResponse("static/index.html")
+    """API root endpoint."""
+    return {
+        "status": "ok",
+        "service": "API Performance Analyzer",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health"
+    }
 
 @app.get("/branch-selector")
 async def branch_selector():
-    """Serve the branch selector interface."""
-    return FileResponse("static/branch-selector.html")
+    """Branch selector endpoint - static file not available in ECS."""
+    return JSONResponse(
+        status_code=404,
+        content={"error": "Static files not available in this deployment. Use the API endpoints."}
+    )
 
 
 @app.get("/health")

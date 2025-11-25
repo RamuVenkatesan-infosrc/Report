@@ -24,7 +24,7 @@ class BedrockService:
     def _initialize_client(self):
         """Initialize the Bedrock client with AWS credentials.
         
-        In Lambda (production): Uses IAM role credentials automatically
+        In Lambda/ECS (production): Uses IAM role credentials automatically
         In local development: Uses explicit credentials from .env if provided
         """
         try:
@@ -33,38 +33,47 @@ class BedrockService:
                 logger.info("Bedrock is disabled in configuration")
                 return
             
-            # Detect if running in Lambda (production)
+            # Detect if running in Lambda
             is_lambda = bool(
-                os.getenv("AWS_EXECUTION_ENV") or 
+                os.getenv("AWS_EXECUTION_ENV") == "AWS_Lambda_python" or
                 os.getenv("LAMBDA_TASK_ROOT") or 
                 os.getenv("AWS_LAMBDA_FUNCTION_NAME")
             )
+            
+            # Detect if running in ECS
+            is_ecs = bool(
+                os.getenv("ECS_CONTAINER_METADATA_URI") or
+                os.getenv("AWS_EXECUTION_ENV", "").startswith("ECS") or
+                os.getenv("AWS_EXECUTION_ENV", "").startswith("AWS_ECS")
+            )
+            
+            # In AWS (Lambda or ECS): Use IAM role - don't pass explicit credentials
+            is_aws_production = is_lambda or is_ecs
             
             # Initialize Bedrock client configuration
             bedrock_config = {
                 'region_name': self.settings.aws_region,
             }
             
-            # In Lambda: Always use IAM role (don't pass explicit credentials)
-            # In local: Use explicit credentials from .env if provided
-            if not is_lambda and self.settings.aws_access_key_id and self.settings.aws_secret_access_key:
-                # Local development: Use explicit credentials from .env
+            if is_aws_production:
+                # AWS production (Lambda or ECS): Use IAM role (boto3 will automatically use execution/task role)
+                env_type = "Lambda" if is_lambda else "ECS"
+                logger.info(f"Bedrock client initialized with IAM role ({env_type} environment)")
+            elif self.settings.aws_access_key_id and self.settings.aws_secret_access_key:
+                # Local development: Use explicit credentials from .env if provided
                 bedrock_config.update({
                     'aws_access_key_id': self.settings.aws_access_key_id,
                     'aws_secret_access_key': self.settings.aws_secret_access_key
                 })
                 logger.info("Bedrock client initialized with explicit credentials (local development)")
-            elif is_lambda:
-                # Lambda: Use IAM role (boto3 will automatically use Lambda execution role)
-                logger.info("Bedrock client initialized with IAM role (Lambda environment)")
+                
+                # Add session token if provided (for temporary credentials, only in local)
+                if self.settings.aws_session_token:
+                    bedrock_config['aws_session_token'] = self.settings.aws_session_token
+                    logger.info("Bedrock client initialized with session token")
             else:
                 # Fallback: Use default credential chain (IAM role, env vars, or ~/.aws/credentials)
                 logger.info("Bedrock client initialized with default credential chain")
-            
-            # Add session token if provided (for temporary credentials, only in local)
-            if not is_lambda and self.settings.aws_session_token:
-                bedrock_config['aws_session_token'] = self.settings.aws_session_token
-                logger.info("Bedrock client initialized with session token")
             
             # Configure timeouts for Bedrock requests
             # Note: API Gateway has a 30-second timeout, but Lambda Function URLs support 900s
@@ -85,11 +94,11 @@ class BedrockService:
             logger.error(f"Failed to initialize Bedrock client: {str(e)}", exc_info=True)
             logger.error(
                 f"Bedrock initialization failed. Check:\n"
-                f"1. IAM role has bedrock:InvokeModel permission\n"
+                f"1. IAM role (Lambda execution role or ECS task role) has bedrock:InvokeModel permission\n"
                 f"2. Bedrock model access enabled in AWS console\n"
                 f"3. Region {self.settings.aws_region} supports Bedrock\n"
                 f"4. ENABLE_BEDROCK environment variable is 'true'\n"
-                f"5. Lambda execution role is properly attached"
+                f"5. IAM role is properly attached to Lambda/ECS task"
             )
             self.bedrock_client = None
     

@@ -1,0 +1,38 @@
+{
+  "family": "report-analyzer-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::383574875115:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::383574875115:role/ecsTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "report-analyzer-api",
+      "image": "383574875115.dkr.ecr.us-east-1.amazonaws.com/report-analyzer-api:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "STAGE", "value": "dev" },
+        { "name": "LOG_LEVEL", "value": "INFO" },
+        { "name": "ENABLE_BEDROCK", "value": "true" },
+        { "name": "BEDROCK_MODEL_ID", "value": "anthropic.claude-3-5-sonnet-20240620-v1:0" },
+        { "name": "ALLOWED_ORIGINS", "value": "*" },
+        { "name": "AWS_REGION", "value": "us-east-1" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/report-analyzer-api",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

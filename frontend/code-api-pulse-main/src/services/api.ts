@@ -2,8 +2,6 @@
 import config from '@/config/environment';
 
 const API_BASE_URL = config.apiBaseUrl;
-// Use Function URL for long-running endpoints (supports 900s vs API Gateway's 30s timeout)
-const FUNCTION_URL = config.functionUrl;
 
 export interface AnalysisConfig {
   response_time_good_threshold?: number;
@@ -86,24 +84,9 @@ export interface HealthResponse {
 
 class ApiService {
   private baseUrl: string;
-  private functionUrl: string;
 
-  constructor(baseUrl: string = API_BASE_URL, functionUrl: string = FUNCTION_URL) {
+  constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
-    this.functionUrl = functionUrl;
-  }
-
-  /**
-   * Get the appropriate URL for an endpoint.
-   * Uses Function URL for long-running endpoints that might exceed API Gateway's 30s limit.
-   */
-  private getUrlForEndpoint(endpoint: string, useFunctionUrl: boolean = false): string {
-    const base = useFunctionUrl ? this.functionUrl : this.baseUrl;
-    // If Function URL is same as base URL, just use base URL
-    if (useFunctionUrl && this.functionUrl === this.baseUrl) {
-      return `${this.baseUrl}${endpoint}`;
-    }
-    return `${base}${endpoint}`;
   }
 
   private async handleResponse<T>(response: Response): Promise<T> {
@@ -242,10 +225,7 @@ class ApiService {
       params.append('token', token);
     }
 
-    // Use Function URL for this endpoint as it can take longer than 30 seconds
-    const url = this.getUrlForEndpoint(`/analyze-full-repository/?${params}`, true);
-
-    const response = await fetch(url, {
+    const response = await fetch(`${this.baseUrl}/analyze-full-repository/?${params}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -270,11 +250,7 @@ class ApiService {
       params.append('token', token);
     }
 
-    // Use Function URL for this endpoint as it can take longer than 30 seconds
-    // Function URLs support up to 900 seconds vs API Gateway's 30 second limit
-    const url = this.getUrlForEndpoint(`/analyze-worst-apis-with-github/?${params}`, true);
-
-    const response = await fetch(url, {
+    const response = await fetch(`${this.baseUrl}/analyze-worst-apis-with-github/?${params}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

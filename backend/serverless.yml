@@ -2,50 +2,183 @@ service: report-analyzer-api
 
 provider:
   name: aws
-  runtime: python3.11
   region: us-east-1
-  architecture: x86_64
-  memorySize: 1000 
-  timeout: 900
-  deploymentMethod: direct
+  stage: ${opt:stage, 'dev'}
+  runtime: provided.al2
 
-  apiGateway:
-    binaryMediaTypes:
-      - "*/*"
+plugins:
+  - serverless-dotenv-plugin
 
-  iam:
-    role:
-      statements:
+custom:
+  ecr:
+    repositoryName: report-analyzer-api
+    imageTag: ${opt:stage, 'dev'}-latest
+
+  ecs:
+    clusterName: report-analyzer-cluster
+    serviceName: report-analyzer-service
+    taskFamily: report-analyzer-api  # Match existing task definition family
+    containerName: report-analyzer-api
+    containerPort: 8000
+    cpu: 1024
+    memory: 2048
+    desiredCount: 1
+
+  environment:
+    STAGE: ${self:provider.stage}
+    LOG_LEVEL: INFO
+    ENABLE_BEDROCK: "true"
+    BEDROCK_MODEL_ID: anthropic.claude-3-5-sonnet-20240620-v1:0
+    ALLOWED_ORIGINS: "*"
+    AWS_REGION: ${self:provider.region}
+    GITHUB_TOKEN: ${env:GITHUB_TOKEN, ''}
+
+resources:
+  Resources:
+
+    #######################
+    # Networking (VPC)
+    # Note: Creating new VPC for ALB. Existing ECS service uses default VPC.
+    # The service will be updated to use this new VPC when deployed.
+    #######################
+    VPC:
+      Type: AWS::EC2::VPC
+      Properties:
+        CidrBlock: 10.0.0.0/16
+        EnableDnsHostnames: true
+        EnableDnsSupport: true
+
+    InternetGateway:
+      Type: AWS::EC2::InternetGateway
+
+    GatewayAttachment:
+      Type: AWS::EC2::VPCGatewayAttachment
+      Properties:
+        VpcId: !Ref VPC
+        InternetGatewayId: !Ref InternetGateway
+
+    PublicSubnet1:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref VPC
+        CidrBlock: 10.0.1.0/24
+        MapPublicIpOnLaunch: true
+        AvailabilityZone: !Select [0, !GetAZs '']
+
+    PublicSubnet2:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref VPC
+        CidrBlock: 10.0.2.0/24
+        MapPublicIpOnLaunch: true
+        AvailabilityZone: !Select [1, !GetAZs '']
+
+    RouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref VPC
+
+    DefaultRoute:
+      Type: AWS::EC2::Route
+      DependsOn: GatewayAttachment
+      Properties:
+        DestinationCidrBlock: 0.0.0.0/0
+        RouteTableId: !Ref RouteTable
+        GatewayId: !Ref InternetGateway
+
+    PublicSubnet1Route:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref PublicSubnet1
+        RouteTableId: !Ref RouteTable
+
+    PublicSubnet2Route:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref PublicSubnet2
+        RouteTableId: !Ref RouteTable
+
+    #######################
+    # Security Groups
+    #######################
+    ALBSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Allow HTTP
+        VpcId: !Ref VPC
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 80
+            ToPort: 80
+            CidrIp: 0.0.0.0/0
+
+    ServiceSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Allow ALB to ECS
+        VpcId: !Ref VPC
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: ${self:custom.ecs.containerPort}
+            ToPort: ${self:custom.ecs.containerPort}
+            SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+    #######################
+    # ECR
+    # Note: ECR repository already exists manually - not creating it here
+    #######################
+    # ECRRepository:
+    #   Type: AWS::ECR::Repository
+    #   Properties:
+    #     RepositoryName: ${self:custom.ecr.repositoryName}
+
+    #######################
+    # ECS
+    # Note: ECSCluster already exists manually - referencing by name
+    # IAM Roles: Will be created/updated if they don't exist or need changes
+    #######################
+    # LogGroup:
+    #   Type: AWS::Logs::LogGroup
+    #   Properties:
+    #     LogGroupName: /ecs/report-analyzer-api
+    #     RetentionInDays: 7
+
+    ECSTaskExecutionRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ecsTaskExecutionRole  # Explicit name to match existing
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+        - Effect: Allow
+              Principal: { Service: ecs-tasks.amazonaws.com }
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+    ECSTaskRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ecsTaskRole  # Explicit name to match existing
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+        - Effect: Allow
+              Principal: { Service: ecs-tasks.amazonaws.com }
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: ECSBedrockDynamoDBPolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
         - Effect: Allow
           Action:
-            - logs:CreateLogGroup
-            - logs:CreateLogStream
-            - logs:PutLogEvents
-          Resource: "*"
-
-        - Effect: Allow
-          Action:
-            - iam:GetRole
-            - iam:PassRole
-          Resource: "*"
-
-        - Effect: Allow
-          Action:
-            - secretsmanager:GetSecretValue
-            - secretsmanager:DescribeSecret
-          Resource:
-            - arn:aws:secretsmanager:${aws:region}:${aws:accountId}:secret:*
-
-        - Effect: Allow
-          Action:
-            - s3:PutObject
-            - s3:GetObject
-            - s3:DeleteObject
-            - s3:ListBucket
-          Resource:
-            - arn:aws:s3:::report-analyzer-*
-            - arn:aws:s3:::report-analyzer-*/*
-
+                    - bedrock:InvokeModel
+                    - bedrock:InvokeModelWithResponseStream
+                    - bedrock:ListModels
+                    - bedrock:GetModel
+                    - aws-marketplace:ViewSubscriptions
+                  Resource: "*"
         - Effect: Allow
           Action:
             - dynamodb:Query
@@ -57,146 +190,115 @@ provider:
             - dynamodb:BatchGetItem
             - dynamodb:BatchWriteItem
             - dynamodb:DescribeTable
-          Resource:
-            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/*
-
+                  Resource: "arn:aws:dynamodb:*:*:table/*"
         - Effect: Allow
           Action:
-            - ses:SendEmail
-            - ses:SendRawEmail
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
           Resource: "*"
 
-        - Effect: Allow
-          Action:
-            - lambda:InvokeFunction
-          Resource:
-            - arn:aws:lambda:${aws:region}:${aws:accountId}:function:report-analyzer-*
+    ECSTaskDefinition:
+      Type: AWS::ECS::TaskDefinition
+      Properties:
+        Family: ${self:custom.ecs.taskFamily}
+        Cpu: ${self:custom.ecs.cpu}
+        Memory: ${self:custom.ecs.memory}
+        NetworkMode: awsvpc
+        RequiresCompatibilities: [FARGATE]
+        ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+        TaskRoleArn: !GetAtt ECSTaskRole.Arn
+        ContainerDefinitions:
+          - Name: ${self:custom.ecs.containerName}
+            Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${self:custom.ecr.repositoryName}:${self:custom.ecr.imageTag}"
+            PortMappings:
+              - ContainerPort: ${self:custom.ecs.containerPort}
+                Protocol: tcp
+            Environment:
+              - Name: STAGE
+                Value: ${self:custom.environment.STAGE}
+              - Name: LOG_LEVEL
+                Value: ${self:custom.environment.LOG_LEVEL}
+              - Name: ENABLE_BEDROCK
+                Value: ${self:custom.environment.ENABLE_BEDROCK}
+              - Name: BEDROCK_MODEL_ID
+                Value: ${self:custom.environment.BEDROCK_MODEL_ID}
+              - Name: ALLOWED_ORIGINS
+                Value: ${self:custom.environment.ALLOWED_ORIGINS}
+              - Name: AWS_REGION
+                Value: ${self:custom.environment.AWS_REGION}
+              - Name: GITHUB_TOKEN
+                Value: ${self:custom.environment.GITHUB_TOKEN}
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: /ecs/report-analyzer-api  # Use existing log group
+                awslogs-region: ${self:provider.region}
+                awslogs-stream-prefix: ecs
+            HealthCheck:
+              Command:
+                - CMD-SHELL
+                - "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${self:custom.ecs.containerPort}/health').read()\" || exit 1"
+              Interval: 30
+              Timeout: 5
+              Retries: 3
+              StartPeriod: 60
 
-        - Effect: Allow
-          Action:
-            - bedrock:InvokeModel
-            - bedrock:InvokeModelWithResponseStream
-            - bedrock:ListModels
-            - bedrock:GetModel
-          Resource: "*"
+    #######################
+    # ALB with 600s Timeout
+    #######################
+    ALB:
+      Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+      Properties:
+        Scheme: internet-facing
+        Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+        SecurityGroups: [!Ref ALBSecurityGroup]
+        LoadBalancerAttributes:
+          - Key: idle_timeout.timeout_seconds
+            Value: "600"
 
-custom:
-  dotenv:
-    include:
-      - DATABASE_URL
-      - GITHUB_TOKEN
-      - OPENAI_API_KEY
-      - SECRET_NAME
-      - ALLOWED_ORIGINS
+    TargetGroup:
+      Type: AWS::ElasticLoadBalancingV2::TargetGroup
+      Properties:
+        VpcId: !Ref VPC
+        TargetType: ip
+        Port: ${self:custom.ecs.containerPort}
+        Protocol: HTTP
 
-  pythonRequirements:
-    layer: false
-    usePipenv: false
-    useStaticCache: false
-    useDownloadCache: false
-    dockerizePip: true
+    Listener:
+      Type: AWS::ElasticLoadBalancingV2::Listener
+      Properties:
+        LoadBalancerArn: !Ref ALB
+        Port: 80
+        Protocol: HTTP
+        DefaultActions:
+          - Type: forward
+            TargetGroupArn: !Ref TargetGroup
 
-functions:
-  report-analyzer-api:
-    name: report-analyzer-api-${opt:stage, 'dev'}
-    handler: reportanalysis_enhanced_v2.lambda_handler
-    runtime: python3.11
-    environment:
-      SECRET_NAME: ${env:SECRET_NAME, 'report-analyzer-secrets'}
-      DATABASE_URL: ${env:DATABASE_URL, ''}
-      GITHUB_TOKEN: ${env:GITHUB_TOKEN, ''}
-      OPENAI_API_KEY: ${env:OPENAI_API_KEY, ''}
-      ALLOWED_ORIGINS: ${env:ALLOWED_ORIGINS, '*'}
-      ENABLE_BEDROCK: ${env:ENABLE_BEDROCK, 'true'}
-      BEDROCK_MODEL_ID: ${env:BEDROCK_MODEL_ID, 'anthropic.claude-3-5-sonnet-20240620-v1:0'}
-      STAGE: ${opt:stage, 'dev'}
-      LOG_LEVEL: INFO
-    memorySize: 2048
-    timeout: 900
-    architecture: x86_64
+    ECSService:
+      Type: AWS::ECS::Service
+      Properties:
+        Cluster: ${self:custom.ecs.clusterName}  # Use existing cluster name
+        ServiceName: ${self:custom.ecs.serviceName}  # Use existing service name
+        TaskDefinition: !Ref ECSTaskDefinition
+        DesiredCount: ${self:custom.ecs.desiredCount}
+        LaunchType: FARGATE
+        NetworkConfiguration:
+          AwsvpcConfiguration:
+            AssignPublicIp: ENABLED
+            Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+            SecurityGroups: [!Ref ServiceSecurityGroup]
+        LoadBalancers:
+          - ContainerName: ${self:custom.ecs.containerName}
+            ContainerPort: ${self:custom.ecs.containerPort}
+            TargetGroupArn: !Ref TargetGroup
+      # Note: If service already exists with different VPC, you may need to:
+      # 1. Delete existing service first: aws ecs delete-service --cluster report-analyzer-cluster --service report-analyzer-service --force --region us-east-1
+      # 2. Then deploy with serverless
+      # OR manually update service to use new VPC/subnets
 
-    # ✅ Lambda Function URL (CORS simplified for Serverless v4+)
-    url:
-      cors: true
+  Outputs:
+    PublicURL:
+      Description: Public URL to access ECS
+      Value: !Sub "http://${ALB.DNSName}"
 
-    package:
-      include:
-        - reportanalysis_enhanced_v2.py
-        - app/**
-      exclude:
-        - venv/**
-        - __pycache__/**
-        - "*.pyc"
-        - node_modules/**
-        - .env
-        - .git/**
-        - tests/**
-
-    events:
-      - http:
-          path: /
-          method: any
-          cors:
-            origin: "*"
-            allowCredentials: true
-            headers:
-              - Content-Type
-              - Authorization
-              - X-Requested-With
-
-      - http:
-          path: /{proxy+}
-          method: any
-          cors:
-            origin: "*"
-            allowCredentials: true
-            headers:
-              - Content-Type
-              - Authorization
-              - X-Requested-With
-
-      - http:
-          path: /openapi.json
-          method: get
-          cors:
-            origin: "*"
-            headers:
-              - Content-Type
-            allowCredentials: false
-
-      - http:
-          path: /docs
-          method: get
-          cors:
-            origin: "*"
-            headers:
-              - Content-Type
-            allowCredentials: false
-
-      - http:
-          path: /redoc
-          method: get
-          cors:
-            origin: "*"
-            headers:
-              - Content-Type
-            allowCredentials: false
-
-package:
-  patterns:
-    - "!node_modules/**"
-    - "!venv/**"
-    - "!__pycache__/**"
-    - "!.git/**"
-    - "!.vscode/**"
-    - "!tests/**"
-    - "!*.pyc"
-    - "!.env"
-    - "!.env.*"
-    - "reportanalysis_enhanced_v2.py"
-    - "app/**"
-  individually: false
-
-plugins:
-  - serverless-dotenv-plugin
-  - serverless-python-requirements
